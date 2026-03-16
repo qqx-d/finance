@@ -1,4 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="100" fill="#6C63FF"/>
-  <text x="256" y="320" font-family="Arial, sans-serif" font-size="260" fill="white" text-anchor="middle" font-weight="bold">₽</text>
+  <defs>
+    <linearGradient id="bg512" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7B66FF"/>
+      <stop offset="100%" stop-color="#5A46E6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="100" fill="url(#bg512)"/>
+  <circle cx="256" cy="256" r="149" fill="#FFFFFF" opacity="0.97"/>
+  <g fill="none" stroke="#5F4CF5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M331 173C310 151 281 138 249 138C185 138 133 190 133 254C133 318 185 370 249 370C281 370 310 357 331 335" stroke-width="27"/>
+    <path d="M155 221H288" stroke-width="24"/>
+    <path d="M155 285H288" stroke-width="24"/>
+  </g>
 </svg>
