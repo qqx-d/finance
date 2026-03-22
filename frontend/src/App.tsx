@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import type { Transaction, Category, MonthStats, SavingsGoal, RecurringPayment, BudgetLimit, Analytics } from "./types";
+import type {
+  Transaction,
+  Category,
+  MonthStats,
+  SavingsGoal,
+  RecurringPayment,
+  BudgetLimit,
+  Analytics,
+  PublicUser,
+  AuthResponse,
+} from "./types";
 import * as api from "./api";
 import MainScreen from "./components/MainScreen";
 import AddTransaction from "./components/AddTransaction";
@@ -12,6 +22,7 @@ import CategoryManager from "./components/CategoryManager";
 import PaymentCalendar from "./components/PaymentCalendar";
 import HabitAnalysis from "./components/HabitAnalysis";
 import BudgetManager from "./components/BudgetManager";
+import AuthScreen from "./components/AuthScreen";
 
 type Page = "home" | "history" | "savings" | "recurring" | "charts" | "settings" | "categories" | "calendar" | "habits" | "budgetManager";
 
@@ -19,6 +30,8 @@ export default function App() {
   const [page, setPage] = useState<Page>("home");
   const [showAdd, setShowAdd] = useState(false);
   const [month, setMonth] = useState(() => new Date().toISOString().substring(0, 7));
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState<PublicUser | null>(null);
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -28,7 +41,18 @@ export default function App() {
   const [budgets, setBudgets] = useState<BudgetLimit[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
+  const resetData = useCallback(() => {
+    setTransactions([]);
+    setCategories([]);
+    setStats(null);
+    setSavingsGoals([]);
+    setRecurringPayments([]);
+    setBudgets([]);
+    setAnalytics(null);
+  }, []);
+
   const loadData = useCallback(async () => {
+    if (!authUser) return;
     try {
       const [txs, cats, st, goals, recs, budg, anl] = await Promise.all([
         api.getTransactions(month),
@@ -49,16 +73,40 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load data:", e);
     }
-  }, [month]);
+  }, [authUser, month]);
 
   useEffect(() => {
+    if (!api.hasAuthToken()) {
+      setAuthReady(true);
+      return;
+    }
+
+    api.getMe()
+      .then(({ user }) => {
+        setAuthUser(user);
+      })
+      .catch(() => {
+        api.clearAuthToken();
+        setAuthUser(null);
+      })
+      .finally(() => {
+        setAuthReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) {
+      resetData();
+      return;
+    }
     loadData();
-  }, [loadData]);
+  }, [authUser, loadData, resetData]);
 
   // Process recurring payments on load
   useEffect(() => {
+    if (!authUser) return;
     api.processRecurring().then(() => loadData()).catch(() => {});
-  }, []);
+  }, [authUser, loadData]);
 
   // Apply saved theme on mount
   useEffect(() => {
@@ -86,6 +134,38 @@ export default function App() {
     });
     loadData();
   };
+
+  const handleAuthenticated = ({ token, user }: AuthResponse) => {
+    api.setAuthToken(token);
+    setAuthUser(user);
+    setPage("home");
+    setShowAdd(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Ignore logout transport errors and clear local session anyway.
+    }
+    api.clearAuthToken();
+    setAuthUser(null);
+    resetData();
+    setPage("home");
+    setShowAdd(false);
+  };
+
+  if (!authReady) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card auth-loading">Проверка сессии...</div>
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
 
   const renderPage = () => {
     switch (page) {
@@ -131,8 +211,10 @@ export default function App() {
       case "settings":
         return (
           <Settings
+            user={authUser}
             onBack={() => setPage("home")}
             onNavigate={(p: string) => setPage(p as Page)}
+            onLogout={handleLogout}
           />
         );
       case "categories":

@@ -2,25 +2,170 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveDir } from "jsr:@std/http/file-server";
 import * as db from "./db.ts";
-import type { Transaction, Category, SavingsGoal, RecurringPayment, BudgetLimit } from "./types.ts";
+import {
+  createPasswordCredentials,
+  createSessionToken,
+  isValidUsername,
+  normalizeUsername,
+  verifyPassword,
+} from "./auth.ts";
+import type {
+  Transaction,
+  Category,
+  SavingsGoal,
+  RecurringPayment,
+  BudgetLimit,
+  User,
+  Session,
+} from "./types.ts";
 
-const app = new Hono();
+type AppVariables = {
+  user: User;
+};
+
+type PublicUser = Pick<User, "id" | "username" | "createdAt">;
+
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const publicAuthPaths = new Set(["/api/auth/register", "/api/auth/login"]);
+
+const app = new Hono<{ Variables: AppVariables }>();
 
 app.use("/*", cors());
+
+function toPublicUser(user: User): PublicUser {
+  return {
+    id: user.id,
+    username: user.username,
+    createdAt: user.createdAt,
+  };
+}
+
+function getTokenFromRequest(c: Parameters<typeof app.fetch>[0] extends never ? never : any): string {
+  const header = c.req.header("Authorization") || "";
+  if (!header.startsWith("Bearer ")) return "";
+  return header.slice(7).trim();
+}
+
+async function createUserSession(userId: string): Promise<Session> {
+  const now = new Date();
+  const session: Session = {
+    token: createSessionToken(),
+    userId,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
+  };
+  await db.createSession(session);
+  return session;
+}
+
+app.use("/api/*", async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  if (publicAuthPaths.has(path)) {
+    await next();
+    return;
+  }
+
+  const token = getTokenFromRequest(c);
+  if (!token) {
+    return c.json({ error: "Требуется авторизация" }, 401);
+  }
+
+  const session = await db.getSession(token);
+  if (!session) {
+    return c.json({ error: "Сессия не найдена" }, 401);
+  }
+
+  if (new Date(session.expiresAt).getTime() <= Date.now()) {
+    await db.deleteSession(token);
+    return c.json({ error: "Сессия истекла" }, 401);
+  }
+
+  const user = await db.getUser(session.userId);
+  if (!user) {
+    await db.deleteSession(token);
+    return c.json({ error: "Пользователь не найден" }, 401);
+  }
+
+  c.set("user", user);
+  await next();
+});
+
+app.post("/api/auth/register", async (c) => {
+  const body = await c.req.json();
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!isValidUsername(username)) {
+    return c.json({ error: "Логин должен быть длиной 3-32 символа и без пробелов" }, 400);
+  }
+
+  if (password.length < 6) {
+    return c.json({ error: "Пароль должен быть не короче 6 символов" }, 400);
+  }
+
+  const credentials = await createPasswordCredentials(password);
+  const user: User = {
+    id: crypto.randomUUID(),
+    username,
+    usernameKey: normalizeUsername(username),
+    passwordHash: credentials.passwordHash,
+    passwordSalt: credentials.passwordSalt,
+    createdAt: new Date().toISOString(),
+  };
+
+  const createdUser = await db.createUser(user);
+  if (!createdUser) {
+    return c.json({ error: "Пользователь с таким логином уже существует" }, 409);
+  }
+
+  await db.seedDefaults(createdUser.id);
+  const session = await createUserSession(createdUser.id);
+
+  return c.json({ token: session.token, user: toPublicUser(createdUser) }, 201);
+});
+
+app.post("/api/auth/login", async (c) => {
+  const body = await c.req.json();
+  const username = typeof body.username === "string" ? body.username : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  const user = await db.getUserByUsername(username);
+  if (!user || !(await verifyPassword(password, user))) {
+    return c.json({ error: "Неверный логин или пароль" }, 401);
+  }
+
+  await db.seedDefaults(user.id);
+  const session = await createUserSession(user.id);
+  return c.json({ token: session.token, user: toPublicUser(user) });
+});
+
+app.get("/api/auth/me", async (c) => {
+  return c.json({ user: toPublicUser(c.get("user")) });
+});
+
+app.post("/api/auth/logout", async (c) => {
+  const token = getTokenFromRequest(c);
+  if (token) {
+    await db.deleteSession(token);
+  }
+  return c.json({ ok: true });
+});
 
 // --- Transactions ---
 
 app.get("/api/transactions", async (c) => {
+  const user = c.get("user");
   const month = c.req.query("month");
   const categoryId = c.req.query("categoryId");
   const type = c.req.query("type");
-  let transactions = await db.getTransactions(month);
+  let transactions = await db.getTransactions(user.id, month);
   if (categoryId) transactions = transactions.filter((t) => t.categoryId === categoryId);
   if (type) transactions = transactions.filter((t) => t.type === type);
   return c.json(transactions);
 });
 
 app.post("/api/transactions", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json();
   const tx: Transaction = {
     id: crypto.randomUUID(),
@@ -33,12 +178,12 @@ app.post("/api/transactions", async (c) => {
     recurringPaymentId: body.recurringPaymentId,
     createdAt: new Date().toISOString(),
   };
-  await db.createTransaction(tx);
+  await db.createTransaction(user.id, tx);
 
   if (tx.type === "savings" && tx.savingsGoalId) {
-    const goal = await db.getSavingsGoal(tx.savingsGoalId);
+    const goal = await db.getSavingsGoal(user.id, tx.savingsGoalId);
     if (goal) {
-      await db.updateSavingsGoal(goal.id, {
+      await db.updateSavingsGoal(user.id, goal.id, {
         currentAmount: goal.currentAmount + tx.amount,
       });
     }
@@ -48,59 +193,66 @@ app.post("/api/transactions", async (c) => {
 });
 
 app.delete("/api/transactions/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
-  const tx = await db.getTransaction(id);
+  const tx = await db.getTransaction(user.id, id);
   if (tx && tx.type === "savings" && tx.savingsGoalId) {
-    const goal = await db.getSavingsGoal(tx.savingsGoalId);
+    const goal = await db.getSavingsGoal(user.id, tx.savingsGoalId);
     if (goal) {
-      await db.updateSavingsGoal(goal.id, {
+      await db.updateSavingsGoal(user.id, goal.id, {
         currentAmount: Math.max(0, goal.currentAmount - tx.amount),
       });
     }
   }
-  const ok = await db.deleteTransaction(id);
+  const ok = await db.deleteTransaction(user.id, id);
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
 // --- Categories ---
 
 app.get("/api/categories", async (c) => {
-  const cats = await db.getCategories();
+  const user = c.get("user");
+  const cats = await db.getCategories(user.id);
   return c.json(cats);
 });
 
 app.post("/api/categories", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json();
   const cat: Category = {
     id: crypto.randomUUID(),
     name: body.name,
     type: body.type,
   };
-  await db.createCategory(cat);
+  await db.createCategory(user.id, cat);
   return c.json(cat, 201);
 });
 
 app.put("/api/categories/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
   const body = await c.req.json();
-  const updated = await db.updateCategory(id, body);
+  const updated = await db.updateCategory(user.id, id, body);
   return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
 });
 
 app.delete("/api/categories/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
-  const ok = await db.deleteCategory(id);
+  const ok = await db.deleteCategory(user.id, id);
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
 // --- Savings Goals ---
 
 app.get("/api/savings", async (c) => {
-  const goals = await db.getSavingsGoals();
+  const user = c.get("user");
+  const goals = await db.getSavingsGoals(user.id);
   return c.json(goals);
 });
 
 app.post("/api/savings", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json();
   const goal: SavingsGoal = {
     id: crypto.randomUUID(),
@@ -109,28 +261,31 @@ app.post("/api/savings", async (c) => {
     currentAmount: 0,
     createdAt: new Date().toISOString(),
   };
-  await db.createSavingsGoal(goal);
+  await db.createSavingsGoal(user.id, goal);
   return c.json(goal, 201);
 });
 
 app.put("/api/savings/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
   const body = await c.req.json();
-  const updated = await db.updateSavingsGoal(id, body);
+  const updated = await db.updateSavingsGoal(user.id, id, body);
   return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
 });
 
 app.delete("/api/savings/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
-  const ok = await db.deleteSavingsGoal(id);
+  const ok = await db.deleteSavingsGoal(user.id, id);
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
 app.post("/api/savings/:id/deposit", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
   const body = await c.req.json();
   const amount = Number(body.amount);
-  const goal = await db.getSavingsGoal(id);
+  const goal = await db.getSavingsGoal(user.id, id);
   if (!goal) return c.json({ error: "Not found" }, 404);
 
   const tx: Transaction = {
@@ -143,8 +298,8 @@ app.post("/api/savings/:id/deposit", async (c) => {
     savingsGoalId: id,
     createdAt: new Date().toISOString(),
   };
-  await db.createTransaction(tx);
-  const updated = await db.updateSavingsGoal(id, {
+  await db.createTransaction(user.id, tx);
+  const updated = await db.updateSavingsGoal(user.id, id, {
     currentAmount: goal.currentAmount + amount,
   });
   return c.json({ goal: updated, transaction: tx });
@@ -153,11 +308,13 @@ app.post("/api/savings/:id/deposit", async (c) => {
 // --- Recurring Payments ---
 
 app.get("/api/recurring", async (c) => {
-  const payments = await db.getRecurringPayments();
+  const user = c.get("user");
+  const payments = await db.getRecurringPayments(user.id);
   return c.json(payments);
 });
 
 app.post("/api/recurring", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json();
   const rp: RecurringPayment = {
     id: crypto.randomUUID(),
@@ -169,26 +326,29 @@ app.post("/api/recurring", async (c) => {
     active: true,
     createdAt: new Date().toISOString(),
   };
-  await db.createRecurringPayment(rp);
+  await db.createRecurringPayment(user.id, rp);
   return c.json(rp, 201);
 });
 
 app.put("/api/recurring/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
   const body = await c.req.json();
-  const updated = await db.updateRecurringPayment(id, body);
+  const updated = await db.updateRecurringPayment(user.id, id, body);
   return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
 });
 
 app.delete("/api/recurring/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
-  const ok = await db.deleteRecurringPayment(id);
+  const ok = await db.deleteRecurringPayment(user.id, id);
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
 app.post("/api/recurring/process", async (c) => {
+  const user = c.get("user");
   const today = new Date().toISOString().split("T")[0];
-  const payments = await db.getRecurringPayments();
+  const payments = await db.getRecurringPayments(user.id);
   const created: Transaction[] = [];
 
   for (const rp of payments) {
@@ -204,7 +364,7 @@ app.post("/api/recurring/process", async (c) => {
       recurringPaymentId: rp.id,
       createdAt: new Date().toISOString(),
     };
-    await db.createTransaction(tx);
+    await db.createTransaction(user.id, tx);
     created.push(tx);
 
     const next = new Date(rp.nextDate);
@@ -212,7 +372,7 @@ app.post("/api/recurring/process", async (c) => {
     else if (rp.period === "monthly") next.setMonth(next.getMonth() + 1);
     else if (rp.period === "yearly") next.setFullYear(next.getFullYear() + 1);
 
-    await db.updateRecurringPayment(rp.id, {
+    await db.updateRecurringPayment(user.id, rp.id, {
       nextDate: next.toISOString().split("T")[0],
     });
   }
@@ -223,8 +383,9 @@ app.post("/api/recurring/process", async (c) => {
 // --- Stats ---
 
 app.get("/api/stats", async (c) => {
+  const user = c.get("user");
   const month = c.req.query("month") || new Date().toISOString().substring(0, 7);
-  const transactions = await db.getTransactions(month);
+  const transactions = await db.getTransactions(user.id, month);
 
   const totalIncome = transactions
     .filter((t) => t.type === "income")
@@ -262,12 +423,14 @@ app.get("/api/stats", async (c) => {
 // --- Budget Limits ---
 
 app.get("/api/budgets", async (c) => {
+  const user = c.get("user");
   const month = c.req.query("month");
-  const budgets = await db.getBudgetLimits(month);
+  const budgets = await db.getBudgetLimits(user.id, month);
   return c.json(budgets);
 });
 
 app.post("/api/budgets", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json();
   const bl: BudgetLimit = {
     id: crypto.randomUUID(),
@@ -275,31 +438,34 @@ app.post("/api/budgets", async (c) => {
     limit: Number(body.limit),
     month: body.month,
   };
-  await db.setBudgetLimit(bl);
+  await db.setBudgetLimit(user.id, bl);
   return c.json(bl, 201);
 });
 
 app.put("/api/budgets/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
   const body = await c.req.json();
   // Read existing, update, save
-  const budgets = await db.getBudgetLimits();
+  const budgets = await db.getBudgetLimits(user.id);
   const existing = budgets.find((b) => b.id === id);
   if (!existing) return c.json({ error: "Not found" }, 404);
   const updated = { ...existing, ...body, id };
-  await db.setBudgetLimit(updated);
+  await db.setBudgetLimit(user.id, updated);
   return c.json(updated);
 });
 
 app.delete("/api/budgets/:id", async (c) => {
+  const user = c.get("user");
   const id = c.req.param("id");
-  const ok = await db.deleteBudgetLimit(id);
+  const ok = await db.deleteBudgetLimit(user.id, id);
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
 // --- Analytics (forecast, avg, habits, cushion, templates) ---
 
 app.get("/api/analytics", async (c) => {
+  const user = c.get("user");
   const month = c.req.query("month") || new Date().toISOString().substring(0, 7);
   const [year, mon] = month.split("-").map(Number);
   const daysInMonth = new Date(year, mon, 0).getDate();
@@ -308,7 +474,7 @@ app.get("/api/analytics", async (c) => {
   const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === mon;
   const dayOfMonth = isCurrentMonth ? today.getDate() : daysInMonth;
 
-  const transactions = await db.getTransactions(month);
+  const transactions = await db.getTransactions(user.id, month);
   const expenses = transactions.filter((t) => t.type === "expense");
   const totalExpense = expenses.reduce((s, t) => s + t.amount, 0);
 
@@ -321,7 +487,7 @@ app.get("/api/analytics", async (c) => {
   // Previous month comparison
   const prevDate = new Date(year, mon - 2, 1);
   const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
-  const prevTransactions = await db.getTransactions(prevMonth);
+  const prevTransactions = await db.getTransactions(user.id, prevMonth);
   const prevExpenses = prevTransactions.filter((t) => t.type === "expense");
   const prevTotalExpense = prevExpenses.reduce((s, t) => s + t.amount, 0);
 
@@ -346,7 +512,7 @@ app.get("/api/analytics", async (c) => {
   }
 
   // Smart templates — top 5 most frequent expense descriptions/amounts
-  const allTransactions = await db.getAllTransactions();
+  const allTransactions = await db.getAllTransactions(user.id);
   const allExpenses = allTransactions.filter((t) => t.type === "expense" && t.comment);
   const commentMap: Record<string, { count: number; amount: number; categoryId: string }> = {};
   for (const t of allExpenses) {
@@ -369,14 +535,14 @@ app.get("/api/analytics", async (c) => {
     }));
 
   // Financial cushion
-  const savingsGoals = await db.getSavingsGoals();
+  const savingsGoals = await db.getSavingsGoals(user.id);
   const totalSaved = savingsGoals.reduce((s, g) => s + g.currentAmount, 0);
   // Use avg of last 3 months of expenses for cushion calc
   const months3: number[] = [];
   for (let i = 0; i < 3; i++) {
     const d = new Date(year, mon - 1 - i, 1);
     const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const txs = await db.getTransactions(m);
+    const txs = await db.getTransactions(user.id, m);
     months3.push(txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0));
   }
   const avgMonthlyExpense = months3.reduce((a, b) => a + b, 0) / Math.max(months3.filter((m) => m > 0).length, 1);
@@ -402,11 +568,12 @@ app.get("/api/analytics", async (c) => {
 // --- Export ---
 
 app.get("/api/export", async (c) => {
+  const user = c.get("user");
   const format = c.req.query("format") || "json";
-  const transactions = await db.getTransactions();
-  const categories = await db.getCategories();
-  const savings = await db.getSavingsGoals();
-  const recurring = await db.getRecurringPayments();
+  const transactions = await db.getTransactions(user.id);
+  const categories = await db.getCategories(user.id);
+  const savings = await db.getSavingsGoals(user.id);
+  const recurring = await db.getRecurringPayments(user.id);
 
   if (format === "csv") {
     const catMap = Object.fromEntries(categories.map((c) => [c.id, c.name]));
@@ -427,20 +594,9 @@ app.get("/api/export", async (c) => {
   return c.json({ transactions, categories, savings, recurring });
 });
 
-// --- Seed & Start ---
+// --- Start ---
 
-await db.seedDefaults();
-
-// Process recurring payments on startup
-const today = new Date().toISOString().split("T")[0];
-const payments = await db.getRecurringPayments();
-for (const rp of payments) {
-  if (rp.active && rp.nextDate <= today) {
-    console.log(`Processing recurring payment: ${rp.name}`);
-  }
-}
-
-console.log("Finance API running on http://localhost:8000");
+console.log("Finance API starting");
 
 // Serve built frontend static files (production)
 const distRoot = new URL("../frontend/dist", import.meta.url).pathname
@@ -461,4 +617,4 @@ app.get("*", async (c) => {
   return res;
 });
 
-Deno.serve({ port: 8000 }, app.fetch);
+Deno.serve(app.fetch);

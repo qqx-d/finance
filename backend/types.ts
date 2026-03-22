@@ -41,3 +41,19 @@ export interface BudgetLimit {
   limit: number;
   month: string; // YYYY-MM
 }
+
+export interface User {
+  id: string;
+  username: string;
+  usernameKey: string;
+  passwordHash: string;
+  passwordSalt: string;
+  createdAt: string;
+}
+
+export interface Session {
+  token: string;
+  userId: string;
+  createdAt: string;
+  expiresAt: string;
+}

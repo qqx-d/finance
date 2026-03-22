@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { IconBack } from "./Icons";
-import { getExportUrl } from "../api";
+import { downloadExport } from "../api";
+import type { PublicUser } from "../types";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -8,14 +9,17 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 interface Props {
+  user: PublicUser;
   onBack: () => void;
   onNavigate: (page: string) => void;
+  onLogout: () => void;
 }
 
-export default function Settings({ onBack, onNavigate }: Props) {
+export default function Settings({ user, onBack, onNavigate, onLogout }: Props) {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("theme") === "dark");
+  const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
 
   const toggleTheme = () => {
     const next = !dark;
@@ -48,11 +52,19 @@ export default function Settings({ onBack, onNavigate }: Props) {
     setDeferredPrompt(null);
   };
 
-  const handleExport = (format: "json" | "csv") => {
-    const a = document.createElement("a");
-    a.href = getExportUrl(format);
-    a.download = `finance-export.${format}`;
-    a.click();
+  const handleExport = async (format: "json" | "csv") => {
+    setExporting(format);
+    try {
+      const blob = await downloadExport(format);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `finance-export.${format}`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } finally {
+      setExporting(null);
+    }
   };
 
   return (
@@ -79,6 +91,14 @@ export default function Settings({ onBack, onNavigate }: Props) {
           </button>
         </div>
       )}
+
+      <div className="section">
+        <div className="account-card">
+          <div className="account-label">Аккаунт</div>
+          <div className="account-name">{user.username}</div>
+          <button className="btn btn-outline account-logout" onClick={onLogout}>Выйти</button>
+        </div>
+      </div>
 
       <div className="section">
         <div className="settings-list">
@@ -134,8 +154,12 @@ export default function Settings({ onBack, onNavigate }: Props) {
       <div className="section">
         <div className="section-title">Экспорт данных</div>
         <div className="btn-row">
-          <button className="btn btn-outline" onClick={() => handleExport("json")}>JSON</button>
-          <button className="btn btn-outline" onClick={() => handleExport("csv")}>CSV</button>
+          <button className="btn btn-outline" onClick={() => handleExport("json")} disabled={exporting !== null}>
+            {exporting === "json" ? "Подготовка..." : "JSON"}
+          </button>
+          <button className="btn btn-outline" onClick={() => handleExport("csv")} disabled={exporting !== null}>
+            {exporting === "csv" ? "Подготовка..." : "CSV"}
+          </button>
         </div>
       </div>
     </div>

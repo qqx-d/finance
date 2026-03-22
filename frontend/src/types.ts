@@ -67,3 +67,14 @@ export interface Analytics {
   avgMonthlyExpense: number;
   cushionMonths: number;
 }
+
+export interface PublicUser {
+  id: string;
+  username: string;
+  createdAt: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: PublicUser;
+}

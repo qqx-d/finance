@@ -1,15 +1,75 @@
-import type { Transaction, Category, SavingsGoal, RecurringPayment, MonthStats } from "./types";
+import type {
+  Transaction,
+  Category,
+  SavingsGoal,
+  RecurringPayment,
+  MonthStats,
+  AuthResponse,
+  PublicUser,
+} from "./types";
 
 const BASE = "/api";
+const AUTH_STORAGE_KEY = "finance.authToken";
+
+let authToken = typeof window !== "undefined" ? window.localStorage.getItem(AUTH_STORAGE_KEY) : null;
+
+function buildHeaders(options?: RequestInit): Headers {
+  const headers = new Headers(options?.headers);
+  if (options?.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+  return headers;
+}
+
+async function parseError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (typeof data?.error === "string") {
+      return data.error;
+    }
+  } catch {
+    // Ignore non-JSON errors.
+  }
+  return `API error: ${res.status}`;
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(BASE + url, {
-    headers: { "Content-Type": "application/json" },
+    headers: buildHeaders(options),
     ...options,
   });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
+
+export function hasAuthToken() {
+  return Boolean(authToken);
+}
+
+export function setAuthToken(token: string) {
+  authToken = token;
+  window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+}
+
+export function clearAuthToken() {
+  authToken = null;
+  window.localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+// Auth
+export const register = (data: { username: string; password: string }) =>
+  request<AuthResponse>("/auth/register", { method: "POST", body: JSON.stringify(data) });
+
+export const login = (data: { username: string; password: string }) =>
+  request<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify(data) });
+
+export const getMe = () => request<{ user: PublicUser }>("/auth/me");
+
+export const logout = () => request<{ ok: boolean }>("/auth/logout", { method: "POST" });
 
 // Transactions
 export const getTransactions = (month?: string, categoryId?: string, type?: string) => {
@@ -100,4 +160,14 @@ export const getAnalytics = (month?: string) => {
 };
 
 // Export
-export const getExportUrl = (format: "json" | "csv") => `${BASE}/export?format=${format}`;
+export async function downloadExport(format: "json" | "csv"): Promise<Blob> {
+  const res = await fetch(`${BASE}/export?format=${format}`, {
+    headers: buildHeaders(),
+  });
+
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+
+  return res.blob();
+}
