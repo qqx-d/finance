@@ -658,6 +658,85 @@ body {
   gap: 6px;
 }
 
+.debt-pay-btn {
+  background: var(--green);
+  color: #fff;
+  box-shadow: none;
+}
+
+.debt-pay-btn-disabled,
+.goal-actions .debt-pay-btn:disabled {
+  background: rgba(143, 149, 178, 0.12);
+  color: var(--text-secondary);
+  border: 1px solid rgba(143, 149, 178, 0.18);
+  box-shadow: none;
+}
+
+.debt-card {
+  border: 1px solid transparent;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.debt-card-closed {
+  background: linear-gradient(180deg, rgba(143, 149, 178, 0.08), rgba(143, 149, 178, 0.04));
+  border-color: var(--border);
+}
+
+.debt-card-closed .goal-name {
+  color: var(--text);
+}
+
+.debt-meta {
+  color: var(--text-secondary);
+}
+
+.debt-meta-closed {
+  color: var(--text-secondary);
+}
+
+.debt-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--primary-light);
+  color: var(--primary);
+  line-height: 1;
+}
+
+.debt-status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.debt-status-badge-closed {
+  background: rgba(143, 149, 178, 0.14);
+  color: var(--text-secondary);
+}
+
+.debt-progress-closed {
+  background: rgba(143, 149, 178, 0.12);
+}
+
+.debt-progress-fill-closed {
+  background: linear-gradient(90deg, rgba(143, 149, 178, 0.7), rgba(143, 149, 178, 0.9));
+}
+
+.goal-actions .btn:disabled {
+  background: rgba(143, 149, 178, 0.12);
+  color: var(--text-secondary);
+  box-shadow: none;
+  border: 1px solid rgba(143, 149, 178, 0.18);
+  cursor: not-allowed;
+  transform: none;
+  opacity: 1;
+}
+
 /* Filters */
 .filters {
   display: flex;
@@ -807,6 +886,79 @@ body {
 .settings-item .arrow {
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-grid-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-tile {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-height: 78px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+
+.settings-tile:active {
+  transform: scale(0.98);
+}
+
+.settings-tile:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.settings-tile-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-tile-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tile-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.settings-tile-active {
+  border-color: var(--primary);
+}
+
+@media (max-width: 420px) {
+  .settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-grid-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Empty state */
@@ -1767,15 +1919,45 @@ body {
   letter-spacing: 0.08em;
 }
 
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .account-name {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  min-width: 0;
 }
 
 .account-logout {
-  margin-top: 14px;
+  margin-top: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  min-height: 32px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account-logout svg {
+  width: 15px;
+  height: 15px;
+}
+
+.account-logout:active {
+  transform: scale(0.96);
 }
 
 @media (max-width: 420px) {

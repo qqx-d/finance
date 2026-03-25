@@ -15,6 +15,7 @@ import type {
   SavingsGoal,
   RecurringPayment,
   BudgetLimit,
+  Debt,
   User,
   Session,
 } from "./types.ts";
@@ -192,10 +193,35 @@ app.post("/api/transactions", async (c) => {
   return c.json(tx, 201);
 });
 
+app.put("/api/transactions/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const updated = await db.updateTransaction(user.id, id, {
+    type: body.type,
+    amount: body.amount !== undefined ? Number(body.amount) : undefined,
+    categoryId: body.categoryId,
+    date: body.date,
+    comment: body.comment,
+    savingsGoalId: body.savingsGoalId,
+  });
+  return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
+});
+
 app.delete("/api/transactions/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   const tx = await db.getTransaction(user.id, id);
+  if (tx?.debtId) {
+    const transactions = await db.getAllTransactions(user.id);
+    const debtTransactions = transactions.filter((item) => item.debtId === tx.debtId);
+    for (const item of debtTransactions) {
+      await db.deleteTransaction(user.id, item.id);
+    }
+    await db.deleteDebt(user.id, tx.debtId);
+    return c.json({ ok: true });
+  }
+
   if (tx && tx.type === "savings" && tx.savingsGoalId) {
     const goal = await db.getSavingsGoal(user.id, tx.savingsGoalId);
     if (goal) {
@@ -462,6 +488,114 @@ app.delete("/api/budgets/:id", async (c) => {
   return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
 });
 
+// --- Debts ---
+
+app.get("/api/debts", async (c) => {
+  const user = c.get("user");
+  const debts = (await db.getDebts(user.id)).map((debt) => ({
+    ...debt,
+    direction: debt.direction || "i_owe",
+  }));
+  return c.json(debts);
+});
+
+app.post("/api/debts", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json();
+  const debt: Debt = {
+    id: crypto.randomUUID(),
+    name: body.name,
+    direction: body.direction === "owed_to_me" ? "owed_to_me" : "i_owe",
+    totalAmount: Number(body.totalAmount),
+    paidAmount: 0,
+    createdAt: new Date().toISOString(),
+  };
+  await db.createDebt(user.id, debt);
+
+  const tx: Transaction = {
+    id: crypto.randomUUID(),
+    type: "expense",
+    amount: debt.totalAmount,
+    categoryId: "cat-expense-debt-created",
+    date: new Date().toISOString().split("T")[0],
+    comment: debt.direction === "i_owe"
+      ? `Добавлен долг: ${debt.name}`
+      : `Выдан долг: ${debt.name}`,
+    debtId: debt.id,
+    debtName: debt.name,
+    debtDirection: debt.direction,
+    debtEvent: "created",
+    createdAt: new Date().toISOString(),
+  };
+  await db.createTransaction(user.id, tx);
+
+  return c.json(debt, 201);
+});
+
+app.put("/api/debts/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const updated = await db.updateDebt(user.id, id, {
+    name: body.name,
+    direction: body.direction,
+    totalAmount: body.totalAmount !== undefined ? Number(body.totalAmount) : undefined,
+    paidAmount: body.paidAmount !== undefined ? Number(body.paidAmount) : undefined,
+  });
+  return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
+});
+
+app.delete("/api/debts/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const transactions = await db.getAllTransactions(user.id);
+  const debtTransactions = transactions.filter((tx) => tx.debtId === id);
+  for (const tx of debtTransactions) {
+    await db.deleteTransaction(user.id, tx.id);
+  }
+  const ok = await db.deleteDebt(user.id, id);
+  return ok ? c.json({ ok: true }) : c.json({ error: "Not found" }, 404);
+});
+
+app.post("/api/debts/:id/pay", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const amount = Number(body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return c.json({ error: "Некорректная сумма" }, 400);
+  }
+
+  const debt = await db.getDebt(user.id, id);
+  if (!debt) return c.json({ error: "Not found" }, 404);
+
+  const paidAmount = Math.min(debt.totalAmount, debt.paidAmount + amount);
+  const actualAmount = paidAmount - debt.paidAmount;
+  if (actualAmount <= 0) {
+    return c.json({ error: "Долг уже полностью закрыт" }, 400);
+  }
+
+  const tx: Transaction = {
+    id: crypto.randomUUID(),
+    type: debt.direction === "owed_to_me" ? "income" : "expense",
+    amount: actualAmount,
+    categoryId: debt.direction === "owed_to_me" ? "cat-income-debts" : "cat-expense-debts",
+    date: new Date().toISOString().split("T")[0],
+    comment: debt.direction === "owed_to_me"
+      ? `Возврат по долгу: ${debt.name}`
+      : `Погашение долга: ${debt.name}`,
+    debtId: debt.id,
+    debtName: debt.name,
+    debtDirection: debt.direction,
+    debtEvent: "payment",
+    createdAt: new Date().toISOString(),
+  };
+  await db.createTransaction(user.id, tx);
+
+  const updated = await db.updateDebt(user.id, id, { paidAmount });
+  return updated ? c.json(updated) : c.json({ error: "Not found" }, 404);
+});
+
 // --- Analytics (forecast, avg, habits, cushion, templates) ---
 
 app.get("/api/analytics", async (c) => {
@@ -511,7 +645,7 @@ app.get("/api/analytics", async (c) => {
     categoryComparison[catId] = { current: curr, previous: prev, changePercent };
   }
 
-  // Smart templates — top 5 most frequent expense descriptions/amounts
+  // Smart templates - top 5 most frequent expense descriptions/amounts
   const allTransactions = await db.getAllTransactions(user.id);
   const allExpenses = allTransactions.filter((t) => t.type === "expense" && t.comment);
   const commentMap: Record<string, { count: number; amount: number; categoryId: string }> = {};
@@ -596,17 +730,25 @@ app.get("/api/export", async (c) => {
 
 // --- Start ---
 
-console.log("Finance API starting");
+const portArgIndex = Deno.args.findIndex((arg) => arg === "--port");
+const port = portArgIndex >= 0 ? Number(Deno.args[portArgIndex + 1] || "8000") : 8000;
+
+console.log(`Finance API starting on http://localhost:${port}`);
 
 // Serve built frontend static files (production)
 const distRoot = new URL("../frontend/dist", import.meta.url).pathname
-  // On Windows, pathname starts with /C:/... — strip leading slash
+  // On Windows, pathname starts with /C:/... - strip leading slash
   .replace(/^\/([A-Za-z]:)/, "$1");
 
 app.get("*", async (c) => {
+  const pathname = new URL(c.req.url).pathname;
+  if (pathname.startsWith("/api/")) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
   const res = await serveDir(c.req.raw, { fsRoot: distRoot, quiet: true });
   if (res.status === 404) {
-    // SPA fallback — return index.html
+    // SPA fallback - return index.html
     try {
       const html = await Deno.readTextFile(distRoot + "/index.html");
       return c.html(html);
@@ -617,4 +759,4 @@ app.get("*", async (c) => {
   return res;
 });
 
-Deno.serve(app.fetch);
+Deno.serve({ port }, app.fetch);

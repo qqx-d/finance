@@ -53,7 +53,7 @@ export default function Charts({ stats, categoryMap, month, onMonthChange, onBac
         <button onClick={() => onMonthChange(1)}>&#x203A;</button>
       </div>
 
-      {/* Pie Chart — no labels on chart, use legend below */}
+      {/* Pie Chart - no labels on chart, use legend below */}
       <div className="section" style={{ paddingTop: 0 }}>
         <div className="chart-container">
           <div className="chart-title">Расходы по категориям</div>

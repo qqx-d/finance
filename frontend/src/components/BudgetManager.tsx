@@ -74,7 +74,7 @@ export default function BudgetManager({ budgets, categories, month, onBack, onRe
           budgets.map((b) => (
             <div key={b.id} className="budget-manage-item">
               <div className="budget-manage-info">
-                <div className="budget-manage-name">{catMap[b.categoryId]?.name ?? "—"}</div>
+                <div className="budget-manage-name">{catMap[b.categoryId]?.name ?? "-"}</div>
                 <div className="budget-manage-amount">{fmt(b.limit)}</div>
               </div>
               <div className="budget-manage-actions">

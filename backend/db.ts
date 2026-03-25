@@ -4,6 +4,7 @@ import type {
   SavingsGoal,
   RecurringPayment,
   BudgetLimit,
+  Debt,
   User,
   Session,
 } from "./types.ts";
@@ -77,6 +78,14 @@ export async function getTransactions(userId: string, month?: string): Promise<T
 export async function createTransaction(userId: string, tx: Transaction): Promise<Transaction> {
   await kv.set(userKey(userId, "transactions", tx.id), tx);
   return tx;
+}
+
+export async function updateTransaction(userId: string, id: string, data: Partial<Transaction>): Promise<Transaction | null> {
+  const entry = await kv.get<Transaction>(userKey(userId, "transactions", id));
+  if (!entry.value) return null;
+  const updated = { ...entry.value, ...data, id };
+  await kv.set(userKey(userId, "transactions", id), updated);
+  return updated;
 }
 
 export async function deleteTransaction(userId: string, id: string): Promise<boolean> {
@@ -213,6 +222,43 @@ export async function deleteBudgetLimit(userId: string, id: string): Promise<boo
   return true;
 }
 
+// --- Debts ---
+
+export async function getDebts(userId: string): Promise<Debt[]> {
+  const entries = kv.list<Debt>({ prefix: userKey(userId, "debts") });
+  const results: Debt[] = [];
+  for await (const entry of entries) {
+    results.push(entry.value);
+  }
+  results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return results;
+}
+
+export async function getDebt(userId: string, id: string): Promise<Debt | null> {
+  const entry = await kv.get<Debt>(userKey(userId, "debts", id));
+  return entry.value;
+}
+
+export async function createDebt(userId: string, debt: Debt): Promise<Debt> {
+  await kv.set(userKey(userId, "debts", debt.id), debt);
+  return debt;
+}
+
+export async function updateDebt(userId: string, id: string, data: Partial<Debt>): Promise<Debt | null> {
+  const entry = await kv.get<Debt>(userKey(userId, "debts", id));
+  if (!entry.value) return null;
+  const updated = { ...entry.value, ...data, id };
+  await kv.set(userKey(userId, "debts", id), updated);
+  return updated;
+}
+
+export async function deleteDebt(userId: string, id: string): Promise<boolean> {
+  const entry = await kv.get<Debt>(userKey(userId, "debts", id));
+  if (!entry.value) return false;
+  await kv.delete(userKey(userId, "debts", id));
+  return true;
+}
+
 // --- All Transactions (no month filter) ---
 
 export async function getAllTransactions(userId: string): Promise<Transaction[]> {
@@ -228,22 +274,28 @@ export async function getAllTransactions(userId: string): Promise<Transaction[]>
 
 export async function seedDefaults(userId: string) {
   const cats = await getCategories(userId);
-  if (cats.length > 0) return;
+  const existingIds = new Set(cats.map((cat) => cat.id));
 
   const defaults: Category[] = [
     { id: "cat-income-salary", name: "Зарплата", type: "income" },
     { id: "cat-income-freelance", name: "Фриланс", type: "income" },
     { id: "cat-income-gifts", name: "Подарки", type: "income" },
     { id: "cat-income-invest", name: "Инвестиции", type: "income" },
+    { id: "cat-income-debt-created", name: "Взял в долг", type: "income" },
+    { id: "cat-income-debts", name: "Возврат долга", type: "income" },
     { id: "cat-expense-food", name: "Еда", type: "expense" },
     { id: "cat-expense-transport", name: "Транспорт", type: "expense" },
     { id: "cat-expense-housing", name: "Жильё", type: "expense" },
     { id: "cat-expense-subs", name: "Подписки", type: "expense" },
     { id: "cat-expense-fun", name: "Развлечения", type: "expense" },
     { id: "cat-expense-shopping", name: "Покупки", type: "expense" },
+    { id: "cat-expense-debt-created", name: "Дал в долг", type: "expense" },
+    { id: "cat-expense-debts", name: "Погашение долга", type: "expense" },
   ];
 
   for (const cat of defaults) {
-    await createCategory(userId, cat);
+    if (!existingIds.has(cat.id)) {
+      await createCategory(userId, cat);
+    }
   }
 }

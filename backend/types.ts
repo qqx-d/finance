@@ -7,6 +7,10 @@ export interface Transaction {
   comment?: string;
   savingsGoalId?: string;
   recurringPaymentId?: string;
+  debtId?: string;
+  debtName?: string;
+  debtDirection?: "i_owe" | "owed_to_me";
+  debtEvent?: "created" | "payment";
   createdAt: string;
 }
 
@@ -40,6 +44,15 @@ export interface BudgetLimit {
   categoryId: string;
   limit: number;
   month: string; // YYYY-MM
+}
+
+export interface Debt {
+  id: string;
+  name: string;
+  direction: "i_owe" | "owed_to_me";
+  totalAmount: number;
+  paidAmount: number;
+  createdAt: string;
 }
 
 export interface User {

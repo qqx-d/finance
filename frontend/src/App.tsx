@@ -6,6 +6,7 @@ import type {
   SavingsGoal,
   RecurringPayment,
   BudgetLimit,
+  Debt,
   Analytics,
   PublicUser,
   AuthResponse,
@@ -22,9 +23,10 @@ import CategoryManager from "./components/CategoryManager";
 import PaymentCalendar from "./components/PaymentCalendar";
 import HabitAnalysis from "./components/HabitAnalysis";
 import BudgetManager from "./components/BudgetManager";
+import Debts from "./components/Debts";
 import AuthScreen from "./components/AuthScreen";
 
-type Page = "home" | "history" | "savings" | "recurring" | "charts" | "settings" | "categories" | "calendar" | "habits" | "budgetManager";
+type Page = "home" | "history" | "savings" | "recurring" | "charts" | "settings" | "categories" | "calendar" | "habits" | "budgetManager" | "debts";
 
 export default function App() {
   const [page, setPage] = useState<Page>("home");
@@ -39,6 +41,7 @@ export default function App() {
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
   const [recurringPayments, setRecurringPayments] = useState<RecurringPayment[]>([]);
   const [budgets, setBudgets] = useState<BudgetLimit[]>([]);
+  const [debts, setDebts] = useState<Debt[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
   const resetData = useCallback(() => {
@@ -48,19 +51,21 @@ export default function App() {
     setSavingsGoals([]);
     setRecurringPayments([]);
     setBudgets([]);
+    setDebts([]);
     setAnalytics(null);
   }, []);
 
   const loadData = useCallback(async () => {
     if (!authUser) return;
     try {
-      const [txs, cats, st, goals, recs, budg, anl] = await Promise.all([
+      const [txs, cats, st, goals, recs, budg, deb, anl] = await Promise.all([
         api.getTransactions(month),
         api.getCategories(),
         api.getStats(month),
         api.getSavingsGoals(),
         api.getRecurringPayments(),
         api.getBudgetLimits(month),
+        api.getDebts(),
         api.getAnalytics(month),
       ]);
       setTransactions(txs);
@@ -69,6 +74,7 @@ export default function App() {
       setSavingsGoals(goals);
       setRecurringPayments(recs);
       setBudgets(budg);
+      setDebts(deb);
       setAnalytics(anl);
     } catch (e) {
       console.error("Failed to load data:", e);
@@ -124,17 +130,6 @@ export default function App() {
 
   const categoryMap = Object.fromEntries(categories.map((c) => [c.id, c]));
 
-  const handleQuickAdd = async (data: { comment: string; amount: number; categoryId: string }) => {
-    await api.createTransaction({
-      type: "expense",
-      amount: data.amount,
-      categoryId: data.categoryId,
-      comment: data.comment,
-      date: new Date().toISOString().split("T")[0],
-    });
-    loadData();
-  };
-
   const handleAuthenticated = ({ token, user }: AuthResponse) => {
     api.setAuthToken(token);
     setAuthUser(user);
@@ -174,11 +169,16 @@ export default function App() {
           <History
             transactions={transactions}
             categories={categories}
+            savingsGoals={savingsGoals}
             categoryMap={categoryMap}
             month={month}
             onMonthChange={handleMonthChange}
             onBack={() => setPage("home")}
-            onDelete={async (id) => { await api.deleteTransaction(id); loadData(); }}
+            onEdit={async (id, data) => { await api.updateTransaction(id, data); loadData(); }}
+            onDelete={async (id) => {
+              await api.deleteTransaction(id);
+              loadData();
+            }}
           />
         );
       case "savings":
@@ -251,6 +251,14 @@ export default function App() {
             onRefresh={loadData}
           />
         );
+      case "debts":
+        return (
+          <Debts
+            debts={debts}
+            onBack={() => setPage("settings")}
+            onRefresh={loadData}
+          />
+        );
       default:
         return (
           <MainScreen
@@ -262,7 +270,6 @@ export default function App() {
             budgets={budgets}
             analytics={analytics}
             recurringPayments={recurringPayments}
-            onQuickAdd={handleQuickAdd}
           />
         );
     }
@@ -281,13 +288,14 @@ export default function App() {
           </svg>
           Главная
         </button>
-        <button className={`nav-btn ${page === "charts" ? "active" : ""}`} onClick={() => setPage("charts")}>
+        <button className={`nav-btn ${page === "debts" ? "active" : ""}`} onClick={() => setPage("debts")}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="18" y1="20" x2="18" y2="10" />
-            <line x1="12" y1="20" x2="12" y2="4" />
-            <line x1="6" y1="20" x2="6" y2="14" />
+            <path d="M3 7h18" />
+            <path d="M6 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" />
+            <rect x="3" y="7" width="18" height="13" rx="2" />
+            <path d="M9 13h6" />
           </svg>
-          Графики
+          Долги
         </button>
         <button className="nav-btn-add" onClick={() => setShowAdd(true)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

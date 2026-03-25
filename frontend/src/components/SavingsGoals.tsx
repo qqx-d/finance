@@ -15,6 +15,7 @@ interface Props {
 
 export default function SavingsGoals({ goals, onBack, onRefresh }: Props) {
   const [showCreate, setShowCreate] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [showDeposit, setShowDeposit] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
@@ -41,6 +42,27 @@ export default function SavingsGoals({ goals, onBack, onRefresh }: Props) {
   const handleDelete = async (id: string) => {
     await api.deleteSavingsGoal(id);
     onRefresh();
+  };
+
+  const openEdit = (goal: SavingsGoal) => {
+    setEditId(goal.id);
+    setName(goal.name);
+    setTargetAmount(String(goal.targetAmount));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editId || !name || !targetAmount) return;
+    await api.updateSavingsGoal(editId, { name, targetAmount: parseFloat(targetAmount) });
+    setEditId(null);
+    setName("");
+    setTargetAmount("");
+    onRefresh();
+  };
+
+  const closeEdit = () => {
+    setEditId(null);
+    setName("");
+    setTargetAmount("");
   };
 
   return (
@@ -86,6 +108,13 @@ export default function SavingsGoals({ goals, onBack, onRefresh }: Props) {
                   <div className="progress-fill" style={{ width: `${percent}%` }} />
                 </div>
                 <div className="goal-actions">
+                  <button
+                    className="btn btn-outline btn-sm"
+                    style={{ width: "auto" }}
+                    onClick={() => openEdit(goal)}
+                  >
+                    Редактировать
+                  </button>
                   <button
                     className="btn btn-green btn-sm"
                     style={{ flex: 1 }}
@@ -148,6 +177,28 @@ export default function SavingsGoals({ goals, onBack, onRefresh }: Props) {
               <input type="number" inputMode="decimal" placeholder="2000" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} step="0.01" min="0" />
             </div>
             <button className="btn btn-primary" onClick={handleCreate}>Создать цель</button>
+          </div>
+        </div>
+      )}
+
+      {editId && (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeEdit()}>
+          <div className="modal-sheet">
+            <div className="modal-header">
+              <h2>Редактировать цель</h2>
+              <button className="modal-close" onClick={closeEdit}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="form-group">
+              <label>Название</label>
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            </div>
+            <div className="form-group">
+              <label>Целевая сумма</label>
+              <input type="number" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} step="0.01" min="0" />
+            </div>
+            <button className="btn btn-primary" onClick={handleSaveEdit}>Сохранить</button>
           </div>
         </div>
       )}

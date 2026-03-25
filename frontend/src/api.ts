@@ -3,12 +3,15 @@ import type {
   Category,
   SavingsGoal,
   RecurringPayment,
+  Debt,
   MonthStats,
   AuthResponse,
   PublicUser,
 } from "./types";
 
-const BASE = "/api";
+const BASE = typeof window !== "undefined" && window.location.port === "3000"
+  ? "http://localhost:8002/api"
+  : "/api";
 const AUTH_STORAGE_KEY = "finance.authToken";
 
 let authToken = typeof window !== "undefined" ? window.localStorage.getItem(AUTH_STORAGE_KEY) : null;
@@ -43,7 +46,18 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) throw new Error(await parseError(res));
   if (res.status === 204) return undefined as T;
-  return res.json();
+
+  const contentType = res.headers.get("Content-Type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const text = await res.text();
+    throw new Error(`Ожидался JSON от API, получен другой ответ (${res.status}).`);
+  }
+
+  try {
+    return await res.json();
+  } catch {
+    throw new Error("Не удалось прочитать ответ API как JSON.");
+  }
 }
 
 export function hasAuthToken() {
@@ -83,6 +97,9 @@ export const getTransactions = (month?: string, categoryId?: string, type?: stri
 
 export const createTransaction = (data: Partial<Transaction>) =>
   request<Transaction>("/transactions", { method: "POST", body: JSON.stringify(data) });
+
+export const updateTransaction = (id: string, data: Partial<Transaction>) =>
+  request<Transaction>(`/transactions/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(data) });
 
 export const deleteTransaction = (id: string) =>
   request<{ ok: boolean }>(`/transactions/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -131,6 +148,21 @@ export const deleteRecurringPayment = (id: string) =>
 
 export const processRecurring = () =>
   request<{ processed: number }>("/recurring/process", { method: "POST" });
+
+// Debts
+export const getDebts = () => request<Debt[]>("/debts");
+
+export const createDebt = (data: { name: string; direction: "i_owe" | "owed_to_me"; totalAmount: number }) =>
+  request<Debt>("/debts", { method: "POST", body: JSON.stringify(data) });
+
+export const updateDebt = (id: string, data: Partial<Debt>) =>
+  request<Debt>(`/debts/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteDebt = (id: string) =>
+  request<{ ok: boolean }>(`/debts/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export const payDebt = (id: string, amount: number) =>
+  request<Debt>(`/debts/${encodeURIComponent(id)}/pay`, { method: "POST", body: JSON.stringify({ amount }) });
 
 // Stats
 export const getStats = (month?: string) => {

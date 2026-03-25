@@ -1,4 +1,4 @@
-// BUILD_VERSION is bumped on every deploy — changing this line triggers SW update
+// BUILD_VERSION is bumped on every deploy - changing this line triggers SW update
 const CACHE_VERSION = "finance-v7";
 
 self.addEventListener("install", (event) => {
@@ -19,7 +19,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
-  // Skip API requests — always network
+  // Skip API requests - always network
   if (request.url.includes("/api/")) return;
 
   // HTML navigation requests: ALWAYS network-first

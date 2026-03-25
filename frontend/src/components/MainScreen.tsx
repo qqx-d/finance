@@ -33,19 +33,35 @@ interface Props {
   budgets: BudgetLimit[];
   analytics: Analytics | null;
   recurringPayments: RecurringPayment[];
-  onQuickAdd: (data: { comment: string; amount: number; categoryId: string }) => void;
 }
 
 export default function MainScreen({
   stats, transactions, categoryMap, month, onMonthChange,
-  budgets, analytics, recurringPayments, onQuickAdd,
+  budgets, analytics, recurringPayments,
 }: Props) {
   const sorted = [...transactions].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
   const recent = sorted.slice(0, 5);
 
-  // Budget alerts — categories at 80%+ of limit
+  const getTransactionTitle = (tx: Transaction): string => {
+    if (tx.debtId) {
+      if (tx.debtEvent === "created") {
+        return "Взял в долг";
+      }
+      return tx.debtDirection === "owed_to_me" ? "Мне вернули долг" : "Я погасил долг";
+    }
+    return categoryMap[tx.categoryId]?.name || "Накопление";
+  };
+
+  const getTransactionSubtitle = (tx: Transaction): string | undefined => {
+    if (tx.debtId && tx.debtName) {
+      return tx.debtName;
+    }
+    return tx.comment;
+  };
+
+  // Budget alerts - categories at 80%+ of limit
   const budgetAlerts: { name: string; percent: number; spent: number; limit: number }[] = [];
   for (const b of budgets) {
     const spent = stats?.byCategory[b.categoryId] ?? 0;
@@ -110,24 +126,6 @@ export default function MainScreen({
         </div>
       )}
 
-      {/* Alerts: Upcoming payments */}
-      {upcoming.length > 0 && (
-        <div className="section" style={{ paddingBottom: 0 }}>
-          {upcoming.map((rp) => {
-            const diff = Math.round((new Date(rp.nextDate + "T00:00:00").getTime() - todayMs) / 86400000);
-            const when = diff === 0 ? "Сегодня" : diff === 1 ? "Завтра" : `Через ${diff} дн.`;
-            return (
-              <div key={rp.id} className="alert-banner upcoming">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-                </svg>
-                {when} спишется {rp.name} — {fmt(rp.amount)}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {/* Forecast + Daily avg */}
       {analytics && analytics.totalExpense > 0 && (
         <div className="section" style={{ paddingBottom: 0 }}>
@@ -141,6 +139,24 @@ export default function MainScreen({
               <div className="info-card-value" style={{ color: "var(--orange)" }}>{fmt(analytics.forecast)}</div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Alerts: Upcoming payments */}
+      {upcoming.length > 0 && (
+        <div className="section" style={{ paddingBottom: 0 }}>
+          {upcoming.map((rp) => {
+            const diff = Math.round((new Date(rp.nextDate + "T00:00:00").getTime() - todayMs) / 86400000);
+            const when = diff === 0 ? "Сегодня" : diff === 1 ? "Завтра" : `Через ${diff} дн.`;
+            return (
+              <div key={rp.id} className="alert-banner upcoming">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                </svg>
+                {when} спишется {rp.name} - {fmt(rp.amount)}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -171,7 +187,7 @@ export default function MainScreen({
             return (
               <div key={b.id} className="budget-card">
                 <div className="budget-card-header">
-                  <span className="budget-card-name">{categoryMap[b.categoryId]?.name ?? "—"}</span>
+                  <span className="budget-card-name">{categoryMap[b.categoryId]?.name ?? "-"}</span>
                   <span className="budget-card-amounts">{fmt(spent)} / {fmt(b.limit)}</span>
                 </div>
                 <div className="budget-progress">
@@ -181,25 +197,6 @@ export default function MainScreen({
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Smart templates */}
-      {analytics && analytics.templates.length > 0 && (
-        <div className="section">
-          <div className="section-title">Быстрое добавление</div>
-          <div className="template-scroll">
-            {analytics.templates.map((t, i) => (
-              <button
-                key={i}
-                className="template-chip"
-                onClick={() => onQuickAdd({ comment: t.comment, amount: t.amount, categoryId: t.categoryId })}
-              >
-                <span className="template-chip-name">{t.comment}</span>
-                <span className="template-chip-amount">{fmtFull(t.amount)}</span>
-              </button>
-            ))}
-          </div>
         </div>
       )}
 
@@ -223,15 +220,15 @@ export default function MainScreen({
         ) : (
           <div className="tx-list">
             {recent.map((tx) => {
-              const cat = categoryMap[tx.categoryId];
+              const subtitle = getTransactionSubtitle(tx);
               return (
                 <div key={tx.id} className="tx-item">
                   <div className={`tx-icon ${tx.type}`}>
                     {tx.type === "income" ? <IconIncome /> : tx.type === "savings" ? <IconSavings /> : <IconExpense />}
                   </div>
                   <div className="tx-info">
-                    <div className="tx-category">{cat?.name || "Накопление"}</div>
-                    {tx.comment && <div className="tx-comment">{tx.comment}</div>}
+                    <div className="tx-category">{getTransactionTitle(tx)}</div>
+                    {subtitle && <div className="tx-comment">{subtitle}</div>}
                     <div className="tx-date">{formatDate(tx.date)}</div>
                   </div>
                   <div className={`tx-amount ${tx.type}`}>
